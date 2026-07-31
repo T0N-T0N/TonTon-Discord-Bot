@@ -5,33 +5,52 @@ const {
   GatewayIntentBits,
 } = discord;
 
-const requiredVariables = ["DISCORD_TOKEN", "ROLE_ID"];
-
-for (const variable of requiredVariables) {
-  if (!process.env[variable]) {
-    console.error(`Missing environment variable: ${variable}`);
-    process.exit(1);
-  }
+if (!process.env.DISCORD_TOKEN) {
+  console.error("Missing environment variable: DISCORD_TOKEN");
+  process.exit(1);
 }
 
 const config = {
   token: process.env.DISCORD_TOKEN,
-  roleId: process.env.ROLE_ID,
 
   lumiBotId:
     process.env.LUMI_BOT_ID || "1448480054739730512",
 
-  sourceChannelId:
-    process.env.SOURCE_CHANNEL_ID || null,
+  // Leave blank to watch every channel.
+  // Multiple channel IDs should be separated by commas.
+  sourceChannelIds: process.env.SOURCE_CHANNEL_IDS
+    ? process.env.SOURCE_CHANNEL_IDS
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
+    : [],
 
-  targetChannelId:
-    process.env.TARGET_CHANNEL_ID || null,
+  // Match each Lumi form name to the role that should be pinged.
+  formRoles: {
+    "Forgotten Storyteller Application":
+      process.env.STORYTELLER_ROLE_ID,
 
-  replyToApplication:
-    process.env.REPLY_TO_APPLICATION === "true",
+    "Forgotten Scouts Application":
+      process.env.SCOUTS_ROLE_ID,
 
-  formName:
-    process.env.FORM_NAME?.trim() || null,
+    "Forgotten Helper Application":
+      process.env.HELPER_ROLE_ID,
+
+    "Forgotten Designer Application":
+      process.env.DESIGNER_ROLE_ID,
+
+    "Forgotten Architects Application":
+      process.env.ARCHITECTS_ROLE_ID,
+
+    "Forgotten Visionaries Application":
+      process.env.VISIONARIES_ROLE_ID,
+
+    "Forgotten Festival Application":
+      process.env.FESTIVAL_ROLE_ID,
+
+    "Forgotten Support Application":
+      process.env.SUPPORT_ROLE_ID,
+  },
 };
 
 const client = new Client({
@@ -48,11 +67,13 @@ client.once("ready", () => {
 
 client.on("messageCreate", async (message) => {
   try {
+    // Only process messages from Lumi.
     if (message.author.id !== config.lumiBotId) return;
 
+    // Restrict the bot to selected channels when IDs are provided.
     if (
-      config.sourceChannelId &&
-      message.channel.id !== config.sourceChannelId
+      config.sourceChannelIds.length > 0 &&
+      !config.sourceChannelIds.includes(message.channel.id)
     ) {
       return;
     }
@@ -60,63 +81,55 @@ client.on("messageCreate", async (message) => {
     const embed = message.embeds[0];
     if (!embed) return;
 
-    const title = embed.title || "";
-    const description = embed.description || "";
-
-    if (title !== "📥 New Application") return;
-
-    if (!description.includes("submitted a new application")) {
+    // Match Lumi's application embed.
+    if (embed.title !== "📝 New Application — Pending Review") {
       return;
     }
 
-    if (
-      config.formName &&
-      !description
-        .toLowerCase()
-        .includes(config.formName.toLowerCase())
-    ) {
+    const formField = embed.fields?.find(
+      (field) => field.name.toLowerCase() === "form"
+    );
+
+    const applicantField = embed.fields?.find(
+      (field) => field.name.toLowerCase() === "applicant"
+    );
+
+    const formName = formField?.value?.trim();
+    const applicantName =
+      applicantField?.value?.trim() || "Someone";
+
+    if (!formName) {
+      console.log("Application detected, but no form name was found.");
       return;
     }
 
-    const pingText =
-      `<@&${config.roleId}> A new application was submitted.`;
+    // Find the correct role for this form.
+    const roleId = config.formRoles[formName];
 
-    const messageOptions = {
-      content: pingText,
-      allowedMentions: {
-        roles: [config.roleId],
-      },
-    };
-
-    if (config.targetChannelId) {
-      const targetChannel = await client.channels.fetch(
-        config.targetChannelId
+    if (!roleId) {
+      console.log(
+        `No role is configured for form: ${formName}`
       );
-
-      if (!targetChannel || !targetChannel.isTextBased()) {
-        throw new Error(
-          "TARGET_CHANNEL_ID is not a text-based channel."
-        );
-      }
-
-      await targetChannel.send(messageOptions);
       return;
     }
 
-    if (config.replyToApplication) {
-      await message.reply({
-        ...messageOptions,
-        allowedMentions: {
-          roles: [config.roleId],
-          repliedUser: false,
-        },
-      });
-    } else {
-      await message.channel.send(messageOptions);
-    }
+    // Ping the correct role in the same channel as Lumi's message.
+    await message.channel.send({
+      content:
+        `<@&${roleId}> ${applicantName} submitted a ` +
+        `**${formName}**. Discuss in the thread below.`,
+      allowedMentions: {
+        roles: [roleId],
+      },
+    });
+
+    console.log(
+      `Pinged role ${roleId} for "${formName}" ` +
+      `in channel ${message.channel.id}`
+    );
   } catch (error) {
     console.error(
-      "Failed to process Lumi application:",
+      "Failed to process a Lumi application:",
       error
     );
   }
